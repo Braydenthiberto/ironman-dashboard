@@ -5,9 +5,269 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="apple-mobile-web-app-title" content="Race Ready">
-<title>Race Readiness</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<meta name="apple-mobile-web-app-title" content="Triathlon Ready">
+<title>Triathlon Readiness</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js">
+// ── RACE DATE EDITOR ─────────────────────────────────────────────────────────
+(function(){
+  const stored = localStorage.getItem('im_raceDate');
+  if(stored){const d=new Date(stored+'T00:00:00');if(!isNaN(d))window._customRaceDate=d;}
+  const effectiveDate=()=>window._customRaceDate||RACE_DATE;
+  // Update countdown with effective date
+  const wks2=Math.round((effectiveDate()-new Date(TODAY))/(7*864e5));
+  document.getElementById('wksOut').textContent=wks2>0?wks2:'🏁';
+  document.getElementById('raceDateLabel').textContent=effectiveDate().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const inp=document.getElementById('raceDateInput');
+  if(inp){
+    inp.value=effectiveDate().toISOString().slice(0,10);
+    inp.addEventListener('change',function(e){
+      const d=new Date(this.value+'T00:00:00');
+      if(!isNaN(d)){
+        localStorage.setItem('im_raceDate',this.value);
+        window._customRaceDate=d;
+        const w=Math.round((d-new Date(TODAY))/(7*864e5));
+        document.getElementById('wksOut').textContent=w>0?w:'🏁';
+        document.getElementById('raceDateLabel').textContent=d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+      }
+      inp.style.display='none';
+    });
+  }
+})();
+window.toggleDateEdit=function(){
+  const inp=document.getElementById('raceDateInput');
+  if(!inp)return;
+  inp.style.display=inp.style.display==='none'||!inp.style.display?'block':'none';
+  if(inp.style.display==='block'){setTimeout(()=>inp.focus(),50);}
+};
+
+// ── BEST EFFORTS ─────────────────────────────────────────────────────────────
+(function(){
+  ['swim','bike','run'].forEach(sport=>{
+    const best=W.filter(w=>w.s===sport&&w.km>0).reduce((a,b)=>b.km>a.km?b:a,{km:0});
+    if(!best.km)return;
+    const mi=(best.km*KM2MI),dec=sport==='swim'?2:1;
+    const dt=new Date(best.d+'T00:00:00');
+    const mo=dt.toLocaleDateString('en-US',{month:'short',year:'numeric'});
+    document.getElementById('be'+sport[0].toUpperCase()+sport.slice(1)+'Val').textContent=mi.toFixed(dec)+' mi';
+    document.getElementById('be'+sport[0].toUpperCase()+sport.slice(1)+'Date').textContent=mo;
+  });
+})();
+
+// ── PROJECTED FINISH ─────────────────────────────────────────────────────────
+(function(){
+  // Average age-group finish times (minutes) — published Ironman race data
+  const AVG={
+    full:{swim:76, t1:8, bike:362, t2:6, run:294},
+    half:{swim:38, t1:5, bike:172, t2:4, run:121}
+  };
+  // Standard deviations from published race result distributions
+  const SIGMA={
+    full:{swim:22, bike:75, run:65, total:110},
+    half:{swim:10, bike:30, run:25, total:45}
+  };
+  const DIST={
+    full:{swim:3.86,bike:180.2,run:42.2},
+    half:{swim:1.93,bike:90.1,run:21.1}
+  };
+  const MY={
+    swimPaceKm:29.71,   // min/km — best pool effort extrapolated to open water
+    bikeKmhFull:19.0,   // km/h — conservative for 180km; best tour avg was 18.4 km/h over 84km
+    bikeKmhHalf:21.5,   // km/h — shorter effort allows higher pace
+    runPaceKmFull:6.0,  // min/km — fresh marathon is 4.89; IM run ~20% slower from fatigue
+    runPaceKmHalf:5.4   // min/km — 70.3 run with less accumulated fatigue
+  };
+  // Normal distribution CDF (Abramowitz & Stegun approximation)
+  function normalCDF(z){
+    const t=1/(1+0.2316419*Math.abs(z));
+    const d=0.3989423*Math.exp(-z*z/2);
+    const p=d*t*(0.3193815+t*(-0.3565638+t*(1.7814779+t*(-1.8212560+t*1.3302744))));
+    return z>=0?1-p:p;
+  }
+  function percentile(myMin,avgMin,sigmaMin){
+    // Lower time = better = higher percentile
+    const z=(myMin-avgMin)/sigmaMin;
+    return Math.max(1,Math.min(99,Math.round((1-normalCDF(z))*100)));
+  }
+  function ordinal(n){
+    const s=['th','st','nd','rd'],v=n%100;
+    return n+(s[(v-20)%10]||s[v]||s[0]);
+  }
+  function badge(pct){
+    if(pct>=75)return['pct-top',   ordinal(pct)+' pct'];
+    if(pct>=55)return['pct-above', ordinal(pct)+' pct'];
+    if(pct>=35)return['pct-avg',   ordinal(pct)+' pct'];
+    if(pct>=15)return['pct-below', ordinal(pct)+' pct'];
+    return             ['pct-bot',  ordinal(pct)+' pct'];
+  }
+  function estimate(rk){
+    const d=DIST[rk],a=AVG[rk],sg=SIGMA[rk];
+    const swim=Math.round(MY.swimPaceKm*d.swim);
+    const bike=Math.round(d.bike/(rk==='full'?MY.bikeKmhFull:MY.bikeKmhHalf)*60);
+    const run =Math.round((rk==='full'?MY.runPaceKmFull:MY.runPaceKmHalf)*d.run);
+    const total=swim+a.t1+bike+a.t2+run;
+    const avgTotal=a.swim+a.t1+a.bike+a.t2+a.run;
+    return{swim,bike,run,t1:a.t1,t2:a.t2,total,
+      avgSwim:a.swim,avgBike:a.bike,avgRun:a.run,avgTotal,
+      pctSwim:percentile(swim,a.swim,sg.swim),
+      pctBike:percentile(bike,a.bike,sg.bike),
+      pctRun: percentile(run, a.run, sg.run),
+      pctTotal:percentile(total,avgTotal,sg.total)};
+  }
+  function fmtMin(m){const h=Math.floor(m/60),s=m%60;return h?`${h}:${String(s).padStart(2,'0')}`:`${s}m`;}
+  function renderProj(rk){
+    const e=estimate(rk);
+    const legs=[
+      {ico:'🏊',n:'Swim',my:e.swim,avg:e.avgSwim,pct:e.pctSwim},
+      {ico:'↔', n:'T1',  my:e.t1,  avg:e.t1,     skip:true},
+      {ico:'🚴',n:'Bike',my:e.bike,avg:e.avgBike, pct:e.pctBike},
+      {ico:'↔', n:'T2',  my:e.t2,  avg:e.t2,     skip:true},
+      {ico:'🏃',n:'Run', my:e.run, avg:e.avgRun,  pct:e.pctRun},
+    ];
+    const [tc,tl]=badge(e.pctTotal);
+    document.getElementById('projCard').innerHTML=`
+      <div class="proj-head"><div>Leg</div><div>My Est.</div><div>Avg</div><div>Percentile</div></div>
+      ${legs.map(r=>`<div class="proj-row">
+        <div class="proj-sport">${r.ico} ${r.n}</div>
+        <div class="proj-mine">${fmtMin(r.my)}</div>
+        <div class="proj-avg">${fmtMin(r.avg)}</div>
+        <div>${r.skip?'':(([bc,bl]=badge(r.pct),`<span class="pct-badge ${bc}">${bl}</span>`))}</div>
+      </div>`).join('')}
+      <div class="proj-row proj-total">
+        <div class="proj-sport" style="color:var(--orange)">⏱ Total</div>
+        <div class="proj-mine" style="font-size:16px;color:var(--orange)">${fmtMin(e.total)}</div>
+        <div class="proj-avg">${fmtMin(e.avgTotal)}</div>
+        <div><span class="pct-badge ${tc}">${tl}</span></div>
+      </div>
+      <div class="proj-note">📊 Based on current 2026 fitness vs published age-group distributions. Run is your biggest strength — marathon history puts you well ahead of the field. Bike training is where you'll gain the most time: every +2 km/h on the bike saves ~1 hour on race day.</div>`;
+  }
+  window._renderProj=renderProj;
+  renderProj('full');
+  document.querySelectorAll('.rtab').forEach(b=>b.addEventListener('click',()=>renderProj(b.dataset.race)));
+})();
+
+
+// ── READINESS OVER TIME ───────────────────────────────────────────────────────
+let histChart=null, histRange='2026';
+
+function computeReadinessHistory(raceKey){
+  const r=RACES[raceKey], WINDOW=90;
+  // all month keys present in data + current month
+  const moSet=new Set(W.map(w=>w.d.slice(0,7)));
+  moSet.add(TODAY.slice(0,7));
+  const months=[...moSet].sort();
+  return months.map(mo=>{
+    const yr=+mo.slice(0,4),mth=+mo.slice(5,7)-1;
+    const evalDate=new Date(yr,mth+1,0).toISOString().slice(0,10);
+    const cutoff=daysAgo(evalDate,WINDOW);
+    function best(s){return Math.max(0,...W.filter(w=>w.s===s&&w.d<=evalDate&&w.d>=cutoff&&w.km>0).map(w=>w.km*KM2MI),0);}
+    const sw=best('swim'),bk=best('bike'),rn=best('run');
+    const sp=Math.min(100,sw/r.swim*100),bp=Math.min(100,bk/r.bike*100),rp=Math.min(100,rn/r.run*100);
+    return{mo,overall:Math.round((sp*.20+bp*.45+rp*.35)*10)/10,sp:Math.round(sp),bp:Math.round(bp),rp:Math.round(rp)};
+  });
+}
+
+function renderHistChart(range,raceKey){
+  histRange=range;
+  const data=computeReadinessHistory(raceKey||activeRace);
+  let filtered=data;
+  const tYr=parseInt(TODAY.slice(0,4));
+  if(range==='2026') filtered=data.filter(d=>d.mo>='2026-01');
+  else if(range==='2y') filtered=data.filter(d=>d.mo>=(tYr-2)+'-'+TODAY.slice(5,7));
+  if(!filtered.length)return;
+  const labels=filtered.map(d=>{
+    const[y,m]=d.mo.split('-');
+    return new Date(+y,+m-1,1).toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+  });
+  if(histChart)histChart.destroy();
+  histChart=new Chart(document.getElementById('histChart'),{
+    type:'line',
+    data:{labels,datasets:[
+      {label:'Overall',data:filtered.map(d=>d.overall),borderColor:'#e8773a',backgroundColor:'rgba(232,119,58,.12)',
+       borderWidth:2.5,pointRadius:filtered.length<24?3:0,pointHoverRadius:5,fill:true,tension:.35},
+      {label:'Swim',  data:filtered.map(d=>d.sp),borderColor:'rgba(56,189,248,.55)', borderWidth:1.5,pointRadius:0,fill:false,tension:.35},
+      {label:'Bike',  data:filtered.map(d=>d.bp),borderColor:'rgba(251,146,60,.55)', borderWidth:1.5,pointRadius:0,fill:false,tension:.35},
+      {label:'Run',   data:filtered.map(d=>d.rp),borderColor:'rgba(248,113,113,.55)',borderWidth:1.5,pointRadius:0,fill:false,tension:.35},
+    ]},
+    options:{
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{color:'#888',font:{size:11},boxWidth:10}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y}%`}}
+      },
+      scales:{
+        x:{ticks:{color:'#666',font:{size:10},maxRotation:45},grid:{color:'rgba(255,255,255,.04)'}},
+        y:{min:0,max:100,ticks:{color:'#666',font:{size:10},callback:v=>v+'%'},grid:{color:'rgba(255,255,255,.05)'}}
+      },
+      responsive:true,maintainAspectRatio:false
+    }
+  });
+  document.getElementById('histChart').style.height='170px';
+}
+
+// Hook history tabs
+document.querySelectorAll('#histTabs .tab').forEach(t=>{
+  t.addEventListener('click',function(){
+    document.querySelectorAll('#histTabs .tab').forEach(x=>x.classList.remove('active'));
+    this.classList.add('active');renderHistChart(this.dataset.hrange,activeRace);
+  });
+});
+
+// Patch race toggle to also refresh history + projected
+const _origRtab=document.querySelectorAll('.rtab');
+_origRtab.forEach(b=>b.addEventListener('click',function(){
+  setTimeout(()=>renderHistChart(histRange,activeRace),50);
+}));
+
+setTimeout(()=>renderHistChart('2026','full'),200);
+
+// ── WORKOUT MODAL ─────────────────────────────────────────────────────────────
+const SPORT_LABEL={swim:'🏊 Swim',bike:'🚴 Bike',run:'🏃 Run'};
+const SPORT_COL  ={swim:'var(--swim)',bike:'var(--bike)',run:'var(--run)'};
+
+window.openModal=function(sport){
+  const ws=W.filter(w=>w.s===sport&&w.km>0).sort((a,b)=>b.d.localeCompare(a.d));
+  document.getElementById('modalTitle').textContent=SPORT_LABEL[sport]||sport;
+  document.getElementById('modalTitle').style.color=SPORT_COL[sport]||'var(--text)';
+  // summary stats
+  const totalMi=ws.reduce((a,w)=>a+w.km*KM2MI,0);
+  const bestMi=Math.max(...ws.map(w=>w.km*KM2MI));
+  const paceWs=ws.filter(w=>w.pace&&w.pace<10&&w.pace>0);
+  const avgPace=paceWs.length?paceWs.reduce((a,w)=>a+w.pace,0)/paceWs.length:null;
+  const dec=sport==='swim'?2:1;
+  document.getElementById('modalStats').innerHTML=`
+    <div class="mstat"><div class="mstat-val">${ws.length}</div><div class="mstat-lbl">Sessions</div></div>
+    <div class="mstat"><div class="mstat-val">${totalMi.toFixed(0)}</div><div class="mstat-lbl">Total mi</div></div>
+    <div class="mstat"><div class="mstat-val" style="color:${SPORT_COL[sport]}">${bestMi.toFixed(dec)}</div><div class="mstat-lbl">Best mi</div></div>
+    ${avgPace?`<div class="mstat"><div class="mstat-val">${fmtPace(avgPace)}</div><div class="mstat-lbl">Avg pace</div></div>`:''}
+  `;
+  // item list
+  document.getElementById('modalBody').innerHTML=ws.map(w=>{
+    const mi=(w.km*KM2MI),dt=new Date(w.d+'T00:00:00');
+    const ds=dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+    const meta=[w.min.toFixed(0)+'min'];
+    if(w.hr)meta.push('♥ '+w.hr);
+    const elFt=w.el?Math.round(w.el*3.281):0;if(elFt>30)meta.push('↑'+elFt+'ft');
+    let sub='';
+    if(sport==='run'&&w.pace&&w.pace<10)sub=fmtPace(w.pace)+'/mi';
+    else if(sport==='bike'&&w.spd)sub=(w.spd*KM2MI).toFixed(1)+'mph';
+    else if(sport==='swim'&&w.pace)sub=w.pace.toFixed(0)+' min/km';
+    return`<div class="mitem">
+      <div><div class="mitem-date">${ds}</div><div class="mitem-meta">${meta.join(' · ')}</div></div>
+      <div><div class="mitem-dist" style="color:${SPORT_COL[sport]}">${mi.toFixed(dec)} mi</div><div class="mitem-sub">${sub}</div></div>
+    </div>`;
+  }).join('');
+  document.getElementById('modalOverlay').style.display='flex';
+  document.body.style.overflow='hidden';
+};
+
+window.closeModal=function(){
+  document.getElementById('modalOverlay').style.display='none';
+  document.body.style.overflow='';
+};
+// close on Escape
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
@@ -151,6 +411,111 @@ body{padding-bottom:calc(40px + env(safe-area-inset-bottom,0px));}
 
 /* ── updated ── */
 .updated{text-align:center;font-size:11px;color:var(--dim);margin-top:24px;}
+
+/* ── date editor ── */
+.countdown{cursor:pointer;transition:.15s;}
+.countdown:hover{border-color:var(--orange);}
+.countdown-edit{font-size:9px;color:var(--dim);margin-top:3px;letter-spacing:.06em;text-transform:uppercase;}
+.date-input{display:none;margin-top:7px;background:var(--card2);border:1px solid var(--border);
+  color:var(--text);border-radius:6px;padding:4px 6px;font-size:11px;width:100%;color-scheme:dark;}
+
+/* ── best efforts ── */
+.best-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+.best-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 10px;text-align:center;}
+.best-icon{font-size:18px;margin-bottom:6px;}
+.best-label{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);}
+.best-val{font-size:20px;font-weight:900;margin:4px 0 2px;line-height:1;}
+.best-val.swim{color:var(--swim);}
+.best-val.bike{color:var(--bike);}
+.best-val.run{color:var(--run);}
+.best-date{font-size:10px;color:var(--dim);}
+
+/* ── projected finish ── */
+.proj-card{background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;}
+.proj-head{display:grid;grid-template-columns:2fr 1.5fr 1.5fr 2fr;padding:9px 14px;
+  font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--dim);
+  border-bottom:1px solid var(--border);}
+.proj-row{display:grid;grid-template-columns:2fr 1.5fr 1.5fr 2fr;padding:11px 14px;
+  border-bottom:1px solid rgba(255,255,255,.04);align-items:center;}
+.proj-row:last-of-type{border-bottom:none;}
+.proj-total{background:rgba(255,255,255,.025);border-top:1px solid var(--border);}
+.proj-sport{font-size:13px;font-weight:700;}
+.proj-mine{font-size:14px;font-weight:800;}
+.proj-avg{font-size:12px;color:var(--muted);}
+.pct-badge{display:inline-block;font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;}
+.pct-top{background:rgba(74,222,128,.15);color:#4ade80;}
+.pct-above{background:rgba(163,230,53,.12);color:#a3e635;}
+.pct-avg{background:rgba(250,204,21,.12);color:#facc15;}
+.pct-below{background:rgba(251,146,60,.15);color:#fb923c;}
+.pct-bot{background:rgba(248,113,113,.15);color:#f87171;}
+.proj-note{font-size:11px;color:var(--muted);padding:10px 14px;border-top:1px solid var(--border);line-height:1.5;}
+
+/* ── clickable sport cards ── */
+.sport-mini{cursor:pointer;transition:.15s;}
+.sport-mini:active{opacity:.7;}
+.gap-card{cursor:pointer;transition:.15s;}
+.gap-card:active{opacity:.7;}
+
+/* ── sport filter & unit toggle ── */
+.filter-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;}
+.utog{display:flex;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;flex-shrink:0;}
+.utog button{background:none;border:none;color:var(--muted);font-size:11px;font-weight:700;
+  padding:5px 12px;cursor:pointer;font-family:inherit;transition:.15s;}
+.utog button.active{background:var(--orange);color:#000;}
+.stabs{display:flex;gap:6px;margin-bottom:12px;}
+.stab{background:var(--card);border:1px solid var(--border);border-radius:8px;
+  padding:5px 12px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;font-family:inherit;transition:.15s;}
+.stab.active{background:var(--card2);border-color:var(--muted);color:var(--text);}
+.stab.s-swim.active{border-color:var(--swim);color:var(--swim);}
+.stab.s-bike.active{border-color:var(--bike);color:var(--bike);}
+.stab.s-run.active{border-color:var(--run);color:var(--run);}
+
+/* ── readiness history ── */
+/* reuses .chart-card */
+
+/* ── modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.80);z-index:999;
+  display:flex;align-items:flex-end;backdrop-filter:blur(6px);}
+.modal-sheet{background:#1c1c1e;border-radius:20px 20px 0 0;width:100%;
+  max-height:84vh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom,20px);}
+.modal-handle{width:36px;height:4px;background:var(--border);border-radius:99px;margin:10px auto 0;}
+.modal-hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:14px 18px;position:sticky;top:0;background:#1c1c1e;z-index:1;
+  border-bottom:1px solid var(--border);}
+.modal-sport-name{font-size:18px;font-weight:800;}
+.modal-close{background:var(--card2);border:none;color:var(--text);font-size:18px;
+  width:30px;height:30px;border-radius:50%;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;}
+.modal-stats-row{display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border);}
+.mstat{background:var(--card2);border-radius:10px;padding:10px 12px;flex:1;text-align:center;}
+.mstat-val{font-size:17px;font-weight:900;line-height:1;}
+.mstat-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:3px;}
+.modal-list{padding:6px 14px 8px;}
+.mitem{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);}
+.mitem:last-child{border-bottom:none;}
+.mitem-date{font-size:13px;font-weight:700;}
+.mitem-meta{font-size:11px;color:var(--muted);margin-top:2px;}
+.mitem-dist{font-size:15px;font-weight:800;text-align:right;}
+.mitem-sub{font-size:11px;color:var(--muted);text-align:right;margin-top:2px;}
+
+/* ── monthly calendar ── */
+.mcal-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.mcal-lbl{font-size:14px;font-weight:700;}
+.mcal-btn{background:var(--card2);border:1px solid var(--border);color:var(--text);
+  border-radius:8px;width:34px;height:34px;cursor:pointer;font-size:18px;
+  font-family:inherit;line-height:1;display:flex;align-items:center;justify-content:center;}
+.mcal-btn:disabled{opacity:.3;cursor:default;}
+.mcal-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px;}
+.dow-lbl{font-size:9px;font-weight:700;text-align:center;color:var(--dim);text-transform:uppercase;}
+.mcal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;}
+.mcal-cell{min-height:38px;border-radius:7px;padding:3px 2px;display:flex;flex-direction:column;align-items:center;}
+.mcal-num{font-size:11px;color:var(--muted);line-height:1.4;}
+.mcal-cell.empty .mcal-num{color:transparent;}
+.mcal-cell.today{outline:1px solid var(--orange);}
+.mcal-cell.active-day{background:var(--card2);}
+.mcal-cell.future .mcal-num{color:var(--border);}
+.dot-row{display:flex;gap:2px;flex-wrap:wrap;justify-content:center;margin-top:2px;}
+.mcal-dot{width:6px;height:6px;border-radius:50%;}
 </style>
 </head>
 <body>
@@ -158,15 +523,17 @@ body{padding-bottom:calc(40px + env(safe-area-inset-bottom,0px));}
 <div class="hdr">
   <div class="hdr-left">
     <div class="hdr-eyebrow" id="hdrEyebrow">Full Distance</div>
-    <div class="hdr-title"><b>IRONMAN</b> READINESS</div>
+    <div class="hdr-title"><b>TRIATHLON</b> READINESS</div>
     <div class="race-toggle" style="margin-top:10px;display:flex;gap:6px;">
       <button class="rtab active" data-race="full">Full IM</button>
       <button class="rtab" data-race="half">70.3</button>
     </div>
   </div>
-  <div class="countdown">
+  <div class="countdown" onclick="toggleDateEdit()" title="Tap to set race date">
     <div class="countdown-n" id="wksOut">—</div>
     <div class="countdown-l">Weeks Out</div>
+    <div class="countdown-edit">✏ set date</div>
+    <input type="date" id="raceDateInput" class="date-input" onclick="event.stopPropagation()">
   </div>
 </div>
 
@@ -188,21 +555,21 @@ body{padding-bottom:calc(40px + env(safe-area-inset-bottom,0px));}
     </div>
     <div class="hero-bar-bg"><div class="hero-bar" id="heroBar" style="width:0%"></div></div>
     <div class="sport-row">
-      <div class="sport-mini">
+      <div class="sport-mini" onclick="openModal('swim')" title="View all swim sessions">
         <div class="sport-mini-icon">🏊</div>
         <div class="sport-mini-name">Swim</div>
         <div class="sport-mini-pct swim" id="swimPct">—%</div>
         <div class="sport-mini-bar"><div class="sport-mini-fill swim-fill" id="swimBar" style="width:0%"></div></div>
         <div class="sport-mini-sub" id="swimSub">—</div>
       </div>
-      <div class="sport-mini">
+      <div class="sport-mini" onclick="openModal('bike')" title="View all bike sessions">
         <div class="sport-mini-icon">🚴</div>
         <div class="sport-mini-name">Bike</div>
         <div class="sport-mini-pct bike" id="bikePct">—%</div>
         <div class="sport-mini-bar"><div class="sport-mini-fill bike-fill" id="bikeBar" style="width:0%"></div></div>
         <div class="sport-mini-sub" id="bikeSub">—</div>
       </div>
-      <div class="sport-mini">
+      <div class="sport-mini" onclick="openModal('run')" title="View all run sessions">
         <div class="sport-mini-icon">🏃</div>
         <div class="sport-mini-name">Run</div>
         <div class="sport-mini-pct run" id="runPct">—%</div>
@@ -212,38 +579,90 @@ body{padding-bottom:calc(40px + env(safe-area-inset-bottom,0px));}
     </div>
   </div>
 
+  <!-- READINESS OVER TIME -->
+  <div class="sec">Readiness Over Time</div>
+  <div class="tabs" id="histTabs">
+    <div class="tab active" data-hrange="2026">2026</div>
+    <div class="tab" data-hrange="2y">2 Years</div>
+    <div class="tab" data-hrange="all">All Time</div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Overall Preparedness %</div>
+    <div class="chart-sub">90-day rolling training block · per discipline below</div>
+    <div class="chart-wrap"><canvas id="histChart" style="height:170px"></canvas></div>
+  </div>
+
   <!-- DISCIPLINE GAPS -->
   <div class="sec">Discipline Breakdown</div>
   <div id="gapCards"></div>
 
+  <!-- BEST EFFORTS -->
+  <div class="sec">Best Efforts — All Time</div>
+  <div class="best-grid">
+    <div class="best-card"><div class="best-icon">🏊</div>
+      <div class="best-label">Longest Swim</div>
+      <div class="best-val swim" id="beSwimVal">—</div>
+      <div class="best-date" id="beSwimDate">—</div></div>
+    <div class="best-card"><div class="best-icon">🚴</div>
+      <div class="best-label">Longest Ride</div>
+      <div class="best-val bike" id="beBikeVal">—</div>
+      <div class="best-date" id="beBikeDate">—</div></div>
+    <div class="best-card"><div class="best-icon">🏃</div>
+      <div class="best-label">Longest Run</div>
+      <div class="best-val run" id="beRunVal">—</div>
+      <div class="best-date" id="beRunDate">—</div></div>
+  </div>
+
+  <!-- PROJECTED FINISH -->
+  <div class="sec">Projected Finish Time</div>
+  <div class="proj-card" id="projCard"></div>
+
   <!-- TRAINING LOAD -->
   <div class="sec">Weekly Training Load</div>
-  <div class="tabs" id="periodTabs">
-    <div class="tab active" data-weeks="8">8W</div>
-    <div class="tab" data-weeks="16">16W</div>
-    <div class="tab" data-weeks="52">1Y</div>
-    <div class="tab" data-weeks="0">All</div>
+  <div class="filter-row">
+    <div class="tabs" id="periodTabs">
+      <div class="tab active" data-weeks="0">All Time</div>
+      <div class="tab" data-weeks="52">1 Year</div>
+      <div class="tab" data-weeks="26">6 Months</div>
+      <div class="tab" data-weeks="4">1 Month</div>
+    </div>
+    <div class="utog">
+      <button class="active" id="unitHrs" data-unit="hours">Hours</button>
+      <button id="unitDist" data-unit="dist">Miles</button>
+    </div>
+  </div>
+  <div class="stabs" id="sportTabs">
+    <button class="stab active" data-sport="all">All</button>
+    <button class="stab s-swim" data-sport="swim">🏊 Swim</button>
+    <button class="stab s-bike" data-sport="bike">🚴 Bike</button>
+    <button class="stab s-run" data-sport="run">🏃 Run</button>
   </div>
   <div class="chart-card">
-    <div class="chart-title">Hours per Week</div>
+    <div class="chart-title" id="volChartTitle">Hours per Week</div>
     <div class="chart-sub" id="volumeSub">—</div>
     <div class="chart-wrap"><canvas id="volChart" style="height:160px"></canvas></div>
   </div>
 
   <!-- CONSISTENCY CALENDAR -->
-  <div class="sec">Training Consistency — Last 10 Weeks</div>
+  <div class="sec">Monthly Activity Calendar</div>
   <div class="cal-wrap">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <span style="font-size:13px;font-weight:700;">Activity Heatmap</span>
-      <span style="font-size:11px;color:var(--muted)" id="calStats">—</span>
+    <div class="mcal-nav">
+      <button class="mcal-btn" id="calPrev">&#8249;</button>
+      <span class="mcal-lbl" id="calMonthLabel">—</span>
+      <button class="mcal-btn" id="calNext">&#8250;</button>
     </div>
-    <div class="cal-days" id="calGrid"></div>
-    <div class="cal-legend">
+    <div class="mcal-dow">
+      <div class="dow-lbl">M</div><div class="dow-lbl">T</div><div class="dow-lbl">W</div>
+      <div class="dow-lbl">T</div><div class="dow-lbl">F</div><div class="dow-lbl">S</div><div class="dow-lbl">S</div>
+    </div>
+    <div class="mcal-grid" id="calGrid"></div>
+    <div class="cal-legend" style="margin-top:10px;">
       <div class="cal-leg-item"><div class="cal-leg-dot" style="background:var(--swim)"></div>Swim</div>
       <div class="cal-leg-item"><div class="cal-leg-dot" style="background:var(--bike)"></div>Bike</div>
       <div class="cal-leg-item"><div class="cal-leg-dot" style="background:var(--run)"></div>Run</div>
       <div class="cal-leg-item"><div class="cal-leg-dot" style="background:var(--border)"></div>Rest</div>
     </div>
+    <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px;" id="calStats">—</div>
   </div>
 
   <!-- INSIGHTS -->
@@ -346,6 +765,8 @@ function renderGaps(raceKey,{swimPct,bikePct,runPct}){
     const remaining=(target-bestMi);
     const remStr=remaining>0?`−${remaining.toFixed(s==='swim'?2:1)} mi`:'✓ Covered';
     const card=document.createElement('div');card.className='gap-card';
+    card.onclick=()=>openModal(s);
+    card.title=`View all ${s} sessions`;
     card.innerHTML=`
       <div class="gap-header">
         <div class="gap-left"><span class="gap-icon">${ico}</span>
@@ -377,92 +798,152 @@ document.querySelectorAll('.rtab').forEach(b=>{
 setTimeout(()=>renderScores('full'),100);
 
 // ── VOLUME CHART ──────────────────────────────────────────────────────────────
-let volChart=null,activeWeeks=8;
+let volChart=null,activeWeeks=8,volUnit='hours',volSport='all';
+
 function buildWeekMap(weeks){
   const map={};
   W.forEach(w=>{
     if(weeks>0){const cutoff=daysAgo(TODAY,weeks*7);if(w.d<cutoff)return;}
+    if(volSport!=='all'&&w.s!==volSport)return;
     const wk=getWeekStart(w.d);
     if(!map[wk])map[wk]={swim:0,bike:0,run:0};
-    if(map[wk][w.s]!==undefined)map[wk][w.s]+=w.min/60;
+    const val=volUnit==='hours'?w.min/60:w.km*KM2MI;
+    if(map[wk][w.s]!==undefined)map[wk][w.s]+=val;
   });
   return map;
 }
+
 function renderVol(weeks){
   activeWeeks=weeks;
   const map=buildWeekMap(weeks);
-  const wks=Object.keys(map).sort();
+  // Generate every week in the range using the same Monday-based logic as getWeekStart
+  const currWeekStart=getWeekStart(TODAY);
+  let earlyWeekStr;
+  if(weeks>0){
+    earlyWeekStr=getWeekStart(daysAgo(TODAY,weeks*7));
+  } else {
+    const allKeys=Object.keys(map).sort();
+    earlyWeekStr=allKeys.length?allKeys[0]:currWeekStart;
+  }
+  const wks=[];
+  const cur=new Date(earlyWeekStr+'T00:00:00');
+  const end=new Date(currWeekStart+'T00:00:00');
+  while(cur<=end){wks.push(cur.toISOString().slice(0,10));cur.setDate(cur.getDate()+7);}
   const labels=wks.map(w=>{const d=new Date(w);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});});
-  const swimD=wks.map(w=>+map[w].swim.toFixed(1));
-  const bikeD=wks.map(w=>+map[w].bike.toFixed(1));
-  const runD=wks.map(w=>+map[w].run.toFixed(1));
-  const totalHrs=wks.reduce((a,w)=>a+map[w].swim+map[w].bike+map[w].run,0);
-  const avgHrs=wks.length?totalHrs/wks.length:0;
-  document.getElementById('volumeSub').textContent=`Avg ${avgHrs.toFixed(1)}h/week · Target: 10–15h for Ironman peak`;
+  const isHours=volUnit==='hours',unit=isHours?'hrs':'mi';
+  const stacked=volSport==='all';
+  const SC={swim:'rgba(56,189,248,.8)',bike:'rgba(251,146,60,.8)',run:'rgba(248,113,113,.8)'};
+  let datasets;
+  if(stacked){
+    datasets=[
+      {label:'Swim',data:wks.map(w=>+((map[w]?.swim||0)).toFixed(1)),backgroundColor:SC.swim,borderRadius:3,stack:'a'},
+      {label:'Bike',data:wks.map(w=>+((map[w]?.bike||0)).toFixed(1)),backgroundColor:SC.bike,borderRadius:3,stack:'a'},
+      {label:'Run', data:wks.map(w=>+((map[w]?.run ||0)).toFixed(1)),backgroundColor:SC.run, borderRadius:3,stack:'a'},
+    ];
+  } else {
+    datasets=[{label:volSport,data:wks.map(w=>+((map[w]?.[volSport]||0)).toFixed(1)),backgroundColor:SC[volSport]||SC.run,borderRadius:4}];
+  }
+  const total=wks.reduce((a,w)=>(a+(map[w]?.swim||0)+(map[w]?.bike||0)+(map[w]?.run||0)),0);
+  const avg=wks.length?total/wks.length:0;
+  const sportLabel=volSport==='all'?'all sports':volSport;
+  document.getElementById('volChartTitle').textContent=isHours?'Hours per Week':'Distance per Week (mi)';
+  document.getElementById('volumeSub').textContent=`Avg ${avg.toFixed(isHours?1:0)} ${unit}/week · ${sportLabel}`;
   if(volChart)volChart.destroy();
   volChart=new Chart(document.getElementById('volChart'),{
     type:'bar',
-    data:{labels,datasets:[
-      {label:'Swim',data:swimD,backgroundColor:'rgba(56,189,248,.75)',borderRadius:3,stack:'a'},
-      {label:'Bike',data:bikeD,backgroundColor:'rgba(251,146,60,.75)',borderRadius:3,stack:'a'},
-      {label:'Run', data:runD, backgroundColor:'rgba(248,113,113,.75)',borderRadius:3,stack:'a'},
-    ]},
+    data:{labels,datasets},
     options:{
-      plugins:{legend:{labels:{color:'#888',font:{size:11},boxWidth:10}}},
+      plugins:{legend:{display:stacked,labels:{color:'#888',font:{size:11},boxWidth:10}}},
       scales:{
-        x:{stacked:true,ticks:{color:'#666',font:{size:10},maxRotation:45},grid:{color:'rgba(255,255,255,.04)'}},
-        y:{stacked:true,ticks:{color:'#666',font:{size:10}},grid:{color:'rgba(255,255,255,.05)'},
-           title:{display:true,text:'hrs',color:'#555',font:{size:10}}}
+        x:{stacked,ticks:{color:'#666',font:{size:10},maxRotation:45},grid:{color:'rgba(255,255,255,.04)'}},
+        y:{stacked,ticks:{color:'#666',font:{size:10}},grid:{color:'rgba(255,255,255,.05)'},
+           title:{display:true,text:unit,color:'#555',font:{size:10}}}
       },
       responsive:true,maintainAspectRatio:false
     }
   });
   document.getElementById('volChart').style.height='160px';
 }
-document.querySelectorAll('.tab').forEach(t=>{
+
+// Period tabs
+document.querySelectorAll('#periodTabs .tab').forEach(t=>{
   t.addEventListener('click',function(){
-    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-    this.classList.add('active');
-    renderVol(+this.dataset.weeks);
+    document.querySelectorAll('#periodTabs .tab').forEach(x=>x.classList.remove('active'));
+    this.classList.add('active');renderVol(+this.dataset.weeks);
   });
 });
-renderVol(8);
-
-// ── CONSISTENCY CALENDAR ──────────────────────────────────────────────────────
-(function(){
-  const WEEKS=10, grid=document.getElementById('calGrid');
-  // Build date→sports map
-  const byDate={};
-  W.filter(w=>w.d>=daysAgo(TODAY,WEEKS*7)).forEach(w=>{
-    if(!byDate[w.d])byDate[w.d]=new Set();
-    byDate[w.d].add(w.s);
+// Unit toggle
+document.querySelectorAll('.utog button').forEach(b=>{
+  b.addEventListener('click',function(){
+    document.querySelectorAll('.utog button').forEach(x=>x.classList.remove('active'));
+    this.classList.add('active');volUnit=this.dataset.unit;renderVol(activeWeeks);
   });
-  // Find monday WEEKS weeks ago
-  const startWk=getWeekStart(daysAgo(TODAY,WEEKS*7));
-  const start=new Date(startWk);
-  let total=0,active=0;
-  for(let w=0;w<WEEKS;w++){
-    const col=document.createElement('div');col.className='cal-col';
-    for(let d=0;d<7;d++){
-      const dt=new Date(start);dt.setDate(start.getDate()+w*7+d);
-      const dateStr=dt.toISOString().slice(0,10);
-      const dot=document.createElement('div');
-      const sports=byDate[dateStr];
-      total++;
-      if(dateStr>TODAY){dot.className='cal-dot';dot.style.background='transparent';}
-      else if(!sports||sports.size===0){dot.className='cal-dot empty';}
-      else{
-        active++;
-        if(sports.size>1)dot.className='cal-dot multi';
-        else dot.className='cal-dot '+[...sports][0];
-      }
-      col.appendChild(dot);
+});
+// Sport tabs
+document.querySelectorAll('#sportTabs .stab').forEach(b=>{
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#sportTabs .stab').forEach(x=>x.classList.remove('active'));
+    this.classList.add('active');volSport=this.dataset.sport;renderVol(activeWeeks);
+  });
+});
+renderVol(0);
+
+// ── MONTHLY CALENDAR ─────────────────────────────────────────────────────────
+const SC_CAL={swim:'var(--swim)',bike:'var(--bike)',run:'var(--run)',triathlon:'#a855f7'};
+const MONTH_NAMES=['January','February','March','April','May','June','July','August','September','October','November','December'];
+let calYear=parseInt(TODAY.slice(0,4)), calMonth=parseInt(TODAY.slice(5,7))-1;
+
+function renderCalendar(yr,mo){
+  calYear=yr; calMonth=mo;
+  document.getElementById('calMonthLabel').textContent=MONTH_NAMES[mo]+' '+yr;
+  // nav limits
+  const firstD=W.reduce((a,b)=>a.d<b.d?a:b).d;
+  const fYr=parseInt(firstD.slice(0,4)),fMo=parseInt(firstD.slice(5,7))-1;
+  const tYr=parseInt(TODAY.slice(0,4)),tMo=parseInt(TODAY.slice(5,7))-1;
+  document.getElementById('calPrev').disabled=(yr===fYr&&mo===fMo);
+  document.getElementById('calNext').disabled=(yr===tYr&&mo===tMo);
+  // build workout map
+  const byDate={};
+  W.forEach(w=>{
+    const d=new Date(w.d+'T00:00:00');
+    if(d.getFullYear()===yr&&d.getMonth()===mo){
+      if(!byDate[w.d])byDate[w.d]=[];
+      byDate[w.d].push(w.s);
     }
-    grid.appendChild(col);
+  });
+  const grid=document.getElementById('calGrid');
+  grid.innerHTML='';
+  const firstDow=(new Date(yr,mo,1).getDay()+6)%7; // Mon=0
+  const daysInMo=new Date(yr,mo+1,0).getDate();
+  let activeDays=0,pastDays=0;
+  // leading empties
+  for(let i=0;i<firstDow;i++){
+    const c=document.createElement('div');c.className='mcal-cell empty';
+    c.innerHTML='<div class="mcal-num"> </div>';grid.appendChild(c);
   }
-  const pastDays=Math.min(total,Math.ceil((new Date(TODAY)-start)/(864e5))+1);
-  document.getElementById('calStats').textContent=`${active}/${pastDays} days active`;
-})();
+  for(let d=1;d<=daysInMo;d++){
+    const ds=`${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const sports=byDate[ds];
+    const isToday=ds===TODAY, isFuture=ds>TODAY;
+    if(!isFuture)pastDays++;
+    if(sports&&sports.length)activeDays++;
+    const c=document.createElement('div');
+    c.className='mcal-cell'+(isToday?' today':'')+(sports?' active-day':'')+(isFuture?' future':'');
+    const uniq=[...new Set(sports||[])];
+    const dots=uniq.map(s=>`<div class="mcal-dot" style="background:${SC_CAL[s]||'var(--muted)'}"></div>`).join('');
+    c.innerHTML=`<div class="mcal-num">${d}</div>${uniq.length?`<div class="dot-row">${dots}</div>`:''}`;
+    grid.appendChild(c);
+  }
+  const pct=pastDays>0?Math.round(activeDays/pastDays*100):0;
+  document.getElementById('calStats').textContent=`${activeDays} active · ${pastDays} days · ${pct}% consistency`;
+}
+document.getElementById('calPrev').addEventListener('click',()=>{
+  let m=calMonth-1,y=calYear;if(m<0){m=11;y--;}renderCalendar(y,m);
+});
+document.getElementById('calNext').addEventListener('click',()=>{
+  let m=calMonth+1,y=calYear;if(m>11){m=0;y++;}renderCalendar(y,m);
+});
+renderCalendar(calYear,calMonth);
 
 // ── INSIGHTS ─────────────────────────────────────────────────────────────────
 (function(){
@@ -517,6 +998,279 @@ renderVol(8);
     feed.appendChild(el);
   });
 })();
+
+// ── RACE DATE EDITOR ─────────────────────────────────────────────────────────
+(function(){
+  const stored = localStorage.getItem('im_raceDate');
+  if(stored){const d=new Date(stored+'T00:00:00');if(!isNaN(d))window._customRaceDate=d;}
+  const effectiveDate=()=>window._customRaceDate||RACE_DATE;
+  // Update countdown with effective date
+  const wks2=Math.round((effectiveDate()-new Date(TODAY))/(7*864e5));
+  document.getElementById('wksOut').textContent=wks2>0?wks2:'🏁';
+  document.getElementById('raceDateLabel').textContent=effectiveDate().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const inp=document.getElementById('raceDateInput');
+  if(inp){
+    inp.value=effectiveDate().toISOString().slice(0,10);
+    inp.addEventListener('change',function(e){
+      const d=new Date(this.value+'T00:00:00');
+      if(!isNaN(d)){
+        localStorage.setItem('im_raceDate',this.value);
+        window._customRaceDate=d;
+        const w=Math.round((d-new Date(TODAY))/(7*864e5));
+        document.getElementById('wksOut').textContent=w>0?w:'🏁';
+        document.getElementById('raceDateLabel').textContent=d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+      }
+      inp.style.display='none';
+    });
+  }
+})();
+window.toggleDateEdit=function(){
+  const inp=document.getElementById('raceDateInput');
+  if(!inp)return;
+  inp.style.display=inp.style.display==='none'||!inp.style.display?'block':'none';
+  if(inp.style.display==='block'){setTimeout(()=>inp.focus(),50);}
+};
+
+// ── BEST EFFORTS ─────────────────────────────────────────────────────────────
+(function(){
+  ['swim','bike','run'].forEach(sport=>{
+    const best=W.filter(w=>w.s===sport&&w.km>0).reduce((a,b)=>b.km>a.km?b:a,{km:0});
+    if(!best.km)return;
+    const mi=(best.km*KM2MI),dec=sport==='swim'?2:1;
+    const dt=new Date(best.d+'T00:00:00');
+    const mo=dt.toLocaleDateString('en-US',{month:'short',year:'numeric'});
+    document.getElementById('be'+sport[0].toUpperCase()+sport.slice(1)+'Val').textContent=mi.toFixed(dec)+' mi';
+    document.getElementById('be'+sport[0].toUpperCase()+sport.slice(1)+'Date').textContent=mo;
+  });
+})();
+
+// ── PROJECTED FINISH ─────────────────────────────────────────────────────────
+(function(){
+  // Average age-group finish times (minutes) — published Ironman race data
+  const AVG={
+    full:{swim:76, t1:8, bike:362, t2:6, run:294},
+    half:{swim:38, t1:5, bike:172, t2:4, run:121}
+  };
+  // Standard deviations from published race result distributions
+  const SIGMA={
+    full:{swim:22, bike:75, run:65, total:110},
+    half:{swim:10, bike:30, run:25, total:45}
+  };
+  const DIST={
+    full:{swim:3.86,bike:180.2,run:42.2},
+    half:{swim:1.93,bike:90.1,run:21.1}
+  };
+  const MY={
+    swimPaceKm:29.71,   // min/km — best pool effort extrapolated to open water
+    bikeKmhFull:19.0,   // km/h — conservative for 180km; best tour avg was 18.4 km/h over 84km
+    bikeKmhHalf:21.5,   // km/h — shorter effort allows higher pace
+    runPaceKmFull:6.0,  // min/km — fresh marathon is 4.89; IM run ~20% slower from fatigue
+    runPaceKmHalf:5.4   // min/km — 70.3 run with less accumulated fatigue
+  };
+  // Normal distribution CDF (Abramowitz & Stegun approximation)
+  function normalCDF(z){
+    const t=1/(1+0.2316419*Math.abs(z));
+    const d=0.3989423*Math.exp(-z*z/2);
+    const p=d*t*(0.3193815+t*(-0.3565638+t*(1.7814779+t*(-1.8212560+t*1.3302744))));
+    return z>=0?1-p:p;
+  }
+  function percentile(myMin,avgMin,sigmaMin){
+    // Lower time = better = higher percentile
+    const z=(myMin-avgMin)/sigmaMin;
+    return Math.max(1,Math.min(99,Math.round((1-normalCDF(z))*100)));
+  }
+  function ordinal(n){
+    const s=['th','st','nd','rd'],v=n%100;
+    return n+(s[(v-20)%10]||s[v]||s[0]);
+  }
+  function badge(pct){
+    if(pct>=75)return['pct-top',   ordinal(pct)+' pct'];
+    if(pct>=55)return['pct-above', ordinal(pct)+' pct'];
+    if(pct>=35)return['pct-avg',   ordinal(pct)+' pct'];
+    if(pct>=15)return['pct-below', ordinal(pct)+' pct'];
+    return             ['pct-bot',  ordinal(pct)+' pct'];
+  }
+  function estimate(rk){
+    const d=DIST[rk],a=AVG[rk],sg=SIGMA[rk];
+    const swim=Math.round(MY.swimPaceKm*d.swim);
+    const bike=Math.round(d.bike/(rk==='full'?MY.bikeKmhFull:MY.bikeKmhHalf)*60);
+    const run =Math.round((rk==='full'?MY.runPaceKmFull:MY.runPaceKmHalf)*d.run);
+    const total=swim+a.t1+bike+a.t2+run;
+    const avgTotal=a.swim+a.t1+a.bike+a.t2+a.run;
+    return{swim,bike,run,t1:a.t1,t2:a.t2,total,
+      avgSwim:a.swim,avgBike:a.bike,avgRun:a.run,avgTotal,
+      pctSwim:percentile(swim,a.swim,sg.swim),
+      pctBike:percentile(bike,a.bike,sg.bike),
+      pctRun: percentile(run, a.run, sg.run),
+      pctTotal:percentile(total,avgTotal,sg.total)};
+  }
+  function fmtMin(m){const h=Math.floor(m/60),s=m%60;return h?`${h}:${String(s).padStart(2,'0')}`:`${s}m`;}
+  function renderProj(rk){
+    const e=estimate(rk);
+    const legs=[
+      {ico:'🏊',n:'Swim',my:e.swim,avg:e.avgSwim,pct:e.pctSwim},
+      {ico:'↔', n:'T1',  my:e.t1,  avg:e.t1,     skip:true},
+      {ico:'🚴',n:'Bike',my:e.bike,avg:e.avgBike, pct:e.pctBike},
+      {ico:'↔', n:'T2',  my:e.t2,  avg:e.t2,     skip:true},
+      {ico:'🏃',n:'Run', my:e.run, avg:e.avgRun,  pct:e.pctRun},
+    ];
+    const [tc,tl]=badge(e.pctTotal);
+    document.getElementById('projCard').innerHTML=`
+      <div class="proj-head"><div>Leg</div><div>My Est.</div><div>Avg</div><div>Percentile</div></div>
+      ${legs.map(r=>`<div class="proj-row">
+        <div class="proj-sport">${r.ico} ${r.n}</div>
+        <div class="proj-mine">${fmtMin(r.my)}</div>
+        <div class="proj-avg">${fmtMin(r.avg)}</div>
+        <div>${r.skip?'':(([bc,bl]=badge(r.pct),`<span class="pct-badge ${bc}">${bl}</span>`))}</div>
+      </div>`).join('')}
+      <div class="proj-row proj-total">
+        <div class="proj-sport" style="color:var(--orange)">⏱ Total</div>
+        <div class="proj-mine" style="font-size:16px;color:var(--orange)">${fmtMin(e.total)}</div>
+        <div class="proj-avg">${fmtMin(e.avgTotal)}</div>
+        <div><span class="pct-badge ${tc}">${tl}</span></div>
+      </div>
+      <div class="proj-note">📊 Based on current 2026 fitness vs published age-group distributions. Run is your biggest strength — marathon history puts you well ahead of the field. Bike training is where you'll gain the most time: every +2 km/h on the bike saves ~1 hour on race day.</div>`;
+  }
+  window._renderProj=renderProj;
+  renderProj('full');
+  document.querySelectorAll('.rtab').forEach(b=>b.addEventListener('click',()=>renderProj(b.dataset.race)));
+})();
+
+
+// ── READINESS OVER TIME ───────────────────────────────────────────────────────
+let histChart=null, histRange='2026';
+
+function computeReadinessHistory(raceKey){
+  const r=RACES[raceKey], WINDOW=90;
+  // all month keys present in data + current month
+  const moSet=new Set(W.map(w=>w.d.slice(0,7)));
+  moSet.add(TODAY.slice(0,7));
+  const months=[...moSet].sort();
+  return months.map(mo=>{
+    const yr=+mo.slice(0,4),mth=+mo.slice(5,7)-1;
+    const evalDate=new Date(yr,mth+1,0).toISOString().slice(0,10);
+    const cutoff=daysAgo(evalDate,WINDOW);
+    function best(s){return Math.max(0,...W.filter(w=>w.s===s&&w.d<=evalDate&&w.d>=cutoff&&w.km>0).map(w=>w.km*KM2MI),0);}
+    const sw=best('swim'),bk=best('bike'),rn=best('run');
+    const sp=Math.min(100,sw/r.swim*100),bp=Math.min(100,bk/r.bike*100),rp=Math.min(100,rn/r.run*100);
+    return{mo,overall:Math.round((sp*.20+bp*.45+rp*.35)*10)/10,sp:Math.round(sp),bp:Math.round(bp),rp:Math.round(rp)};
+  });
+}
+
+function renderHistChart(range,raceKey){
+  histRange=range;
+  const data=computeReadinessHistory(raceKey||activeRace);
+  let filtered=data;
+  const tYr=parseInt(TODAY.slice(0,4));
+  if(range==='2026') filtered=data.filter(d=>d.mo>='2026-01');
+  else if(range==='2y') filtered=data.filter(d=>d.mo>=(tYr-2)+'-'+TODAY.slice(5,7));
+  if(!filtered.length)return;
+  const labels=filtered.map(d=>{
+    const[y,m]=d.mo.split('-');
+    return new Date(+y,+m-1,1).toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+  });
+  if(histChart)histChart.destroy();
+  histChart=new Chart(document.getElementById('histChart'),{
+    type:'line',
+    data:{labels,datasets:[
+      {label:'Overall',data:filtered.map(d=>d.overall),borderColor:'#e8773a',backgroundColor:'rgba(232,119,58,.12)',
+       borderWidth:2.5,pointRadius:filtered.length<24?3:0,pointHoverRadius:5,fill:true,tension:.35},
+      {label:'Swim',  data:filtered.map(d=>d.sp),borderColor:'rgba(56,189,248,.55)', borderWidth:1.5,pointRadius:0,fill:false,tension:.35},
+      {label:'Bike',  data:filtered.map(d=>d.bp),borderColor:'rgba(251,146,60,.55)', borderWidth:1.5,pointRadius:0,fill:false,tension:.35},
+      {label:'Run',   data:filtered.map(d=>d.rp),borderColor:'rgba(248,113,113,.55)',borderWidth:1.5,pointRadius:0,fill:false,tension:.35},
+    ]},
+    options:{
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{color:'#888',font:{size:11},boxWidth:10}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y}%`}}
+      },
+      scales:{
+        x:{ticks:{color:'#666',font:{size:10},maxRotation:45},grid:{color:'rgba(255,255,255,.04)'}},
+        y:{min:0,max:100,ticks:{color:'#666',font:{size:10},callback:v=>v+'%'},grid:{color:'rgba(255,255,255,.05)'}}
+      },
+      responsive:true,maintainAspectRatio:false
+    }
+  });
+  document.getElementById('histChart').style.height='170px';
+}
+
+// Hook history tabs
+document.querySelectorAll('#histTabs .tab').forEach(t=>{
+  t.addEventListener('click',function(){
+    document.querySelectorAll('#histTabs .tab').forEach(x=>x.classList.remove('active'));
+    this.classList.add('active');renderHistChart(this.dataset.hrange,activeRace);
+  });
+});
+
+// Patch race toggle to also refresh history + projected
+const _origRtab=document.querySelectorAll('.rtab');
+_origRtab.forEach(b=>b.addEventListener('click',function(){
+  setTimeout(()=>renderHistChart(histRange,activeRace),50);
+}));
+
+setTimeout(()=>renderHistChart('2026','full'),200);
+
+// ── WORKOUT MODAL ─────────────────────────────────────────────────────────────
+const SPORT_LABEL={swim:'🏊 Swim',bike:'🚴 Bike',run:'🏃 Run'};
+const SPORT_COL  ={swim:'var(--swim)',bike:'var(--bike)',run:'var(--run)'};
+
+window.openModal=function(sport){
+  const ws=W.filter(w=>w.s===sport&&w.km>0).sort((a,b)=>b.d.localeCompare(a.d));
+  document.getElementById('modalTitle').textContent=SPORT_LABEL[sport]||sport;
+  document.getElementById('modalTitle').style.color=SPORT_COL[sport]||'var(--text)';
+  // summary stats
+  const totalMi=ws.reduce((a,w)=>a+w.km*KM2MI,0);
+  const bestMi=Math.max(...ws.map(w=>w.km*KM2MI));
+  const paceWs=ws.filter(w=>w.pace&&w.pace<10&&w.pace>0);
+  const avgPace=paceWs.length?paceWs.reduce((a,w)=>a+w.pace,0)/paceWs.length:null;
+  const dec=sport==='swim'?2:1;
+  document.getElementById('modalStats').innerHTML=`
+    <div class="mstat"><div class="mstat-val">${ws.length}</div><div class="mstat-lbl">Sessions</div></div>
+    <div class="mstat"><div class="mstat-val">${totalMi.toFixed(0)}</div><div class="mstat-lbl">Total mi</div></div>
+    <div class="mstat"><div class="mstat-val" style="color:${SPORT_COL[sport]}">${bestMi.toFixed(dec)}</div><div class="mstat-lbl">Best mi</div></div>
+    ${avgPace?`<div class="mstat"><div class="mstat-val">${fmtPace(avgPace)}</div><div class="mstat-lbl">Avg pace</div></div>`:''}
+  `;
+  // item list
+  document.getElementById('modalBody').innerHTML=ws.map(w=>{
+    const mi=(w.km*KM2MI),dt=new Date(w.d+'T00:00:00');
+    const ds=dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+    const meta=[w.min.toFixed(0)+'min'];
+    if(w.hr)meta.push('♥ '+w.hr);
+    const elFt=w.el?Math.round(w.el*3.281):0;if(elFt>30)meta.push('↑'+elFt+'ft');
+    let sub='';
+    if(sport==='run'&&w.pace&&w.pace<10)sub=fmtPace(w.pace)+'/mi';
+    else if(sport==='bike'&&w.spd)sub=(w.spd*KM2MI).toFixed(1)+'mph';
+    else if(sport==='swim'&&w.pace)sub=w.pace.toFixed(0)+' min/km';
+    return`<div class="mitem">
+      <div><div class="mitem-date">${ds}</div><div class="mitem-meta">${meta.join(' · ')}</div></div>
+      <div><div class="mitem-dist" style="color:${SPORT_COL[sport]}">${mi.toFixed(dec)} mi</div><div class="mitem-sub">${sub}</div></div>
+    </div>`;
+  }).join('');
+  document.getElementById('modalOverlay').style.display='flex';
+  document.body.style.overflow='hidden';
+};
+
+window.closeModal=function(){
+  document.getElementById('modalOverlay').style.display='none';
+  document.body.style.overflow='';
+};
+// close on Escape
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+
 </script>
+
+<div class="modal-overlay" id="modalOverlay" style="display:none" onclick="closeModal()">
+  <div class="modal-sheet" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-hdr">
+      <button class="modal-close" onclick="closeModal()">←</button>
+      <span class="modal-sport-name" id="modalTitle">—</span>
+      <div style="width:30px"></div>
+    </div>
+    <div class="modal-stats-row" id="modalStats"></div>
+    <div class="modal-list" id="modalBody"></div>
+  </div>
+</div>
 </body>
 </html>
