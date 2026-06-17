@@ -3516,5 +3516,19 @@
     "speed_kmh": 1.5,
     "elevation_m": 0,
     "source": "manual"
+  },
+  {
+    "sport": "bike",
+    "date": "2026-06-16",
+    "datetime": "2026-06-16T18:02:00",
+    "name": "Evening Ride",
+    "duration_min": 71.7,
+    "distance_km": 26.1,
+    "calories": 656,
+    "avg_hr": 130,
+    "pace_min_per_km": null,
+    "speed_kmh": 21.9,
+    "elevation_m": 283,
+    "source": "manual"
   }
 ]
